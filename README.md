@@ -73,7 +73,7 @@ The robot can also respond using a generated voice, creating a simple conversati
 
 ## Main File
 
-[`voice_controlled_robot.py`](voice_controlled_robot.py)
+[`voice_controlled_robot.py`]
 
 ## Technologies
 
