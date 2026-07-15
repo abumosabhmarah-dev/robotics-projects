@@ -1,0 +1,221 @@
+import time
+import json
+import math
+import tempfile
+import numpy as np
+import sounddevice as sd
+import soundfile as sf
+
+from openai import OpenAI
+from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+
+OPENAI_API_KEY = ""   
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+MODEL_STT = "gpt-4o-transcribe"
+MODEL_DIALOG = "gpt-4o-mini"
+MODEL_TTS = "gpt-4o-mini-tts"
+
+WHEEL_RADIUS = 0.0975
+WHEEL_BASE = 0.33
+DT = 0.05
+
+DEFAULT_LINEAR = 0.25
+DEFAULT_ANGULAR = 60.0
+
+
+sim = RemoteAPIClient().getObject("sim")
+left_motor = sim.getObject("/PioneerP3DX/leftMotor")
+right_motor = sim.getObject("/PioneerP3DX/leftMotor".replace("left","right"))
+
+
+
+def stabilize():
+    for _ in range(30):
+        sim.setJointTargetVelocity(left_motor, 0)
+        sim.setJointTargetVelocity(right_motor, 0)
+        time.sleep(0.05)
+
+time.sleep(1)
+stabilize()
+
+
+
+def record_push_to_talk(fs=16000):
+    print("\n Press ENTER to START talking")
+    input()
+    print(" Recording... Press ENTER to STOP")
+
+    chunks = []
+
+    def callback(indata, frames, time_info, status):
+        if frames > 0:
+            chunks.append(indata.copy())
+
+    with sd.InputStream(samplerate=fs, channels=1, dtype="int16", callback=callback):
+        input()
+
+    if len(chunks) == 0:
+        return None, fs
+
+    audio = np.concatenate(chunks, axis=0)
+    return audio.flatten(), fs
+
+
+
+def speech_to_text(path):
+    with open(path, "rb") as f:
+        r = client.audio.transcriptions.create(
+            model=MODEL_STT,
+            file=f
+        )
+    return (r.text or "").strip()
+
+
+
+def speak(text):
+    print(f" Robot: {text}")
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            r = client.audio.speech.create(
+                model=MODEL_TTS,
+                voice="alloy",
+                input=text,
+                response_format="wav"
+            )
+            tmp.write(r.read())
+            wav = tmp.name
+
+        data, fs = sf.read(wav, dtype="int16")
+        sd.play(data, fs)
+        sd.wait()
+    except:
+        pass
+
+
+
+def delta(a, b):
+    return (a - b + math.pi) % (2 * math.pi) - math.pi
+
+
+def vw_to_wheels(v, w):
+    wl = (v / WHEEL_RADIUS) - (w * WHEEL_BASE / (2 * WHEEL_RADIUS))
+    wr = (v / WHEEL_RADIUS) + (w * WHEEL_BASE / (2 * WHEEL_RADIUS))
+    return wl, wr
+
+
+
+def stop():
+    sim.setJointTargetVelocity(left_motor, 0)
+    sim.setJointTargetVelocity(right_motor, 0)
+
+
+def move_distance(dist):
+    v = DEFAULT_LINEAR
+    sign = 1 if dist > 0 else -1
+    target = abs(dist)
+
+    pl = sim.getJointPosition(left_motor)
+    pr = sim.getJointPosition(right_motor)
+    moved = 0
+
+    while moved < target:
+        cl = sim.getJointPosition(left_motor)
+        cr = sim.getJointPosition(right_motor)
+
+        dl = delta(cl, pl)
+        dr = delta(cr, pr)
+        pl, pr = cl, cr
+
+        moved += abs(WHEEL_RADIUS * (dl + dr) / 2)
+        wl, wr = vw_to_wheels(sign * v, 0)
+        sim.setJointTargetVelocity(left_motor, wl)
+        sim.setJointTargetVelocity(right_motor, wr)
+        time.sleep(DT)
+
+    stop()
+
+
+def turn_angle(deg):
+    w = math.radians(DEFAULT_ANGULAR)
+    sign = 1 if deg > 0 else -1
+    target = abs(math.radians(deg))
+
+    pl = sim.getJointPosition(left_motor)
+    pr = sim.getJointPosition(right_motor)
+    turned = 0
+
+    while turned < target:
+        cl = sim.getJointPosition(left_motor)
+        cr = sim.getJointPosition(right_motor)
+
+        dl = delta(cl, pl)
+        dr = delta(cr, pr)
+        pl, pr = cl, cr
+
+        turned += abs(WHEEL_RADIUS * (dr - dl) / WHEEL_BASE)
+        wl, wr = vw_to_wheels(0, sign * w)
+        sim.setJointTargetVelocity(left_motor, wl)
+        sim.setJointTargetVelocity(right_motor, wr)
+        time.sleep(DT)
+
+    stop()
+
+
+
+SYSTEM_DIALOG = """
+Convert user speech into a SEQUENCE of robot actions.
+
+Rules:
+- Output ONLY valid JSON
+- Do NOT explain
+- Units in meters and degrees
+
+Schema:
+{
+  "reply": "string",
+  "actions": [
+    {"type":"move","distance_m":number},
+    {"type":"turn","angle_deg":number}
+  ],
+  "complete": true
+}
+"""
+
+
+def dialog_step(text):
+    r = client.chat.completions.create(
+        model=MODEL_DIALOG,
+        messages=[
+            {"role":"system","content":SYSTEM_DIALOG},
+            {"role":"user","content":text}
+        ],
+        temperature=0.1
+    )
+    return json.loads(r.choices[0].message.content)
+
+
+
+speak("Hello. I am ready to take commands.")
+
+while True:
+    audio, fs = record_push_to_talk()
+    if audio is None:
+        speak("I did not hear anything.")
+        continue
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        sf.write(tmp.name, audio, fs)
+        text = speech_to_text(tmp.name)
+
+    print(" You:", text)
+    result = dialog_step(text)
+    speak(result["reply"])
+
+    for action in result["actions"]:
+        if action["type"] == "move":
+            move_distance(action["distance_m"])
+        elif action["type"] == "turn":
+            turn_angle(action["angle_deg"])
+
+    speak("Done. Waiting for next command.")
