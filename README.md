@@ -30,4 +30,32 @@ Tools and Libraries:
 - NumPy
 
 
-"""
+# Hand Gesture Robot Control
+
+This project explores an intuitive way of controlling a Pioneer P3-DX mobile robot using hand gestures. A webcam captures the user's hand movements, while MediaPipe detects the hand landmarks and recognizes different gestures. These gestures are then translated into movement commands that control the robot in the CoppeliaSim environment.
+
+The goal of this project was to combine computer vision and robotics to create a simple and interactive human-robot interface. Different gestures allow the robot to move forward, stop, turn, reverse, and increase its speed, making the interaction natural and easy to use.
+
+## Demo Video
+
+https://drive.google.com/file/d/16vN71feMwbLZqi2RgM3dBNau1jTxjY0X/view?usp=sharing
+## Main File
+
+`hand_gesture_robot_control.py`
+
+## Technologies
+
+- Python
+- MediaPipe
+- OpenCV
+- CoppeliaSim
+- ZeroMQ Remote API
+
+## Key Features
+
+- Hand tracking and gesture recognition in real time
+- Robot control through intuitive hand gestures
+- Forward, reverse, left, and right movement
+- Speed boost using a pinch gesture
+- Smooth motion control for more stable navigation
+- Live camera interface with gesture feedback
