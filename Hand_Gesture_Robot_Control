@@ -1,0 +1,186 @@
+# pioneer_finger_control.py
+import cv2, math, time
+from collections import deque
+from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+import mediapipe as mp
+
+
+LEFT_JOINT  = '/PioneerP3DX/leftMotor'
+RIGHT_JOINT = '/PioneerP3DX/rightMotor'
+
+MIRROR_VIEW = True     
+CAM_INDEX   = 0
+
+BASE_V   = 1.2        # forward speed  (m/s-equivalent)
+BOOST_V  = 0.70         # extra forward speed when pinching
+TURN_W   = 1.0          # curvature when turning
+RAMP_V   = 1.80         # m/s-equivalent per second 
+RAMP_W   = 3.00         # rad/s-equivalent per second 
+
+# gesture thresholds (normalized image coords)
+PINCH_THRESH = 0.05     # index–thumb distance
+HORIZ_BIAS   = 1.2      
+# ============================
+
+def clamp_rate(prev, target, max_rate, dt):
+    dv = target - prev
+    lim = max_rate * dt
+    if dv >  lim: dv =  lim
+    if dv < -lim: dv = -lim
+    return prev + dv
+
+def finger_extended(lm, tip, pip):
+    # y increases downward; finger extended if tip above PIP
+    return lm[tip].y < lm[pip].y
+
+def count_fingers_up(lm):
+    # ignore thumb for robustness; check index/middle/ring/pinky
+    up = 0
+    up += 1 if finger_extended(lm, 8, 6) else 0    # index
+    up += 1 if finger_extended(lm,12,10) else 0    # middle
+    up += 1 if finger_extended(lm,16,14) else 0    # ring
+    up += 1 if finger_extended(lm,20,18) else 0    # pinky
+    return up
+
+def index_pointing_direction(lm, mirrored=False):
+    """Return 'left'/'right'/None based on index finger vector (MCP->TIP)."""
+    mcp = lm[5]; tip = lm[8]
+    dx = tip.x - mcp.x
+    dy = tip.y - mcp.y
+    if mirrored:
+        dx = -dx
+    if abs(dx) > HORIZ_BIAS * abs(dy):
+        return 'right' if dx > 0 else 'left'
+    return None
+
+def main():
+    #  connect to CoppeliaSim
+    client = RemoteAPIClient()
+    sim = client.require('sim')
+    left  = sim.getObject(LEFT_JOINT)
+    right = sim.getObject(RIGHT_JOINT)
+
+    # tame torque so the robot won’t tip
+    for j in (left, right):
+        sim.setJointTargetForce(j, 3.0)
+
+    def drive(v, w):
+        # differential drive mapping (wheel base normalized to 1.0 here)
+        vL = v - 0.5*w
+        vR = v + 0.5*w
+        sim.setJointTargetVelocity(left,  float(vL))
+        sim.setJointTargetVelocity(right, float(vR))
+
+    # ---- camera & mediapipe ----
+    cap = cv2.VideoCapture(CAM_INDEX)
+    if not cap.isOpened():
+        raise RuntimeError("Cannot open webcam")
+
+    mp_hands = mp.solutions.hands
+    hands = mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=0.6,
+        min_tracking_confidence=0.6,
+        model_complexity=0,
+    )
+
+    print("🖐️ open=forward | ✊ fist=stop | 👉 index-only → right | 👈 index-only → left | 🤏 pinch=boost | ✌️ peace=reverse | ESC=quit")
+
+    v_cmd = w_cmd = 0.0
+    t_prev = time.time()
+    fps_hist = deque(maxlen=30)
+
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok: break
+            if MIRROR_VIEW:
+                frame = cv2.flip(frame, 1)
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb.flags.writeable = False
+            res = hands.process(rgb)
+
+            v_target, w_target = 0.0, 0.0
+            label = "idle"
+
+            if res.multi_hand_landmarks:
+                lm = res.multi_hand_landmarks[0].landmark
+
+                # finger states
+                fingers_up = count_fingers_up(lm)
+                fist  = (fingers_up == 0)
+                openp = (fingers_up >= 4)
+
+                # pinch (thumb-index distance)
+                thumb_tip = lm[4]; index_tip = lm[8]
+                pinch = math.hypot(index_tip.x - thumb_tip.x,
+                                   index_tip.y - thumb_tip.y) < PINCH_THRESH
+
+                # individual finger checks
+                index_up  = finger_extended(lm, 8, 6)
+                middle_up = finger_extended(lm,12,10)
+                ring_up   = finger_extended(lm,16,14)
+                pinky_up  = finger_extended(lm,20,18)
+                index_only = index_up and not (middle_up or ring_up or pinky_up)
+                peace = index_up and middle_up and not (ring_up or pinky_up)  # ✌️
+
+                if openp:
+                    v_target = BOOST_V if pinch else BASE_V
+                    label = "forward" if not pinch else "boost"
+                elif fist:
+                    v_target, w_target = 0.0, 0.0
+                    label = "stop"
+                elif peace:
+                    # reverse; optional steering if index points left/right
+                    dir_lr = index_pointing_direction(lm, mirrored=MIRROR_VIEW)
+                    v_target = -(BOOST_V if pinch else BASE_V)
+                    if dir_lr == 'right':
+                        w_target = +TURN_W
+                        label = "rev-right" if not pinch else "rev-right (boost)"
+                    elif dir_lr == 'left':
+                        w_target = -TURN_W
+                        label = "rev-left" if not pinch else "rev-left (boost)"
+                    else:
+                        w_target = 0.0
+                        label = "reverse" if not pinch else "reverse (boost)"
+                elif index_only:
+                    # forward with turn according to index direction
+                    dir_lr = index_pointing_direction(lm, mirrored=MIRROR_VIEW)
+                    if dir_lr == 'right':
+                        v_target, w_target = BASE_V, +TURN_W
+                        label = "forward-right"
+                    elif dir_lr == 'left':
+                        v_target, w_target = BASE_V, -TURN_W
+                        label = "forward-left"
+                    else:
+                        v_target, w_target = BASE_V, 0.0
+                        label = "forward"
+                else:
+                    v_target, w_target = 0.0, 0.0
+                    label = "stop"
+
+            # smooth ramping
+            t = time.time()
+            dt = max(1e-3, t - t_prev); t_prev = t
+            v_cmd = clamp_rate(v_cmd, v_target, RAMP_V, dt)
+            w_cmd = clamp_rate(w_cmd, w_target, RAMP_W, dt)
+            drive(v_cmd, w_cmd)
+
+            # HUD
+            fps_hist.append(1.0/dt)
+            fps = sum(fps_hist)/len(fps_hist)
+            cv2.putText(frame, f"{label} | v={v_cmd:.2f} w={w_cmd:.2f} | FPS={fps:.1f}",
+                        (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+            cv2.imshow("PioneerP3DX - Finger Control", frame)
+            if cv2.waitKey(1) & 0xFF == 27:  # ESC
+                break
+
+    finally:
+        drive(0.0, 0.0)
+        cap.release()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
