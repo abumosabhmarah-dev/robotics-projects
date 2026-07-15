@@ -19,8 +19,6 @@ in a simulated environment.
 
 ## Demo Video
 
-🎥 Watch the project demonstration here:
-
 https://drive.google.com/file/d/1F7OqdhZeDJ1fH2hwB3euyxY_cy1bi8-L/view?usp=sharing
 
 Tools and Libraries:
@@ -59,3 +57,57 @@ https://drive.google.com/file/d/16vN71feMwbLZqi2RgM3dBNau1jTxjY0X/view?usp=shari
 - Speed boost using a pinch gesture
 - Smooth motion control for more stable navigation
 - Live camera interface with gesture feedback
+
+# Voice-Controlled Robot
+
+This project explores how a mobile robot can understand spoken instructions and turn them into movement commands.
+
+The user records a voice command through a microphone, such as “move forward one metre and turn left.” The speech is converted into text, interpreted as a sequence of robot actions, and then executed by a Pioneer P3-DX robot in CoppeliaSim.
+
+The robot can also respond using a generated voice, creating a simple conversational interface between the user and the robot.
+
+## Demo Videos
+
+- https://drive.google.com/file/d/14WsPFdbcqEwbA6x8BBe7F1s6uqqCkVxm/view?usp=sharing
+- https://drive.google.com/file/d/1zCQpxyH-BbLoFOxdKTPhNvGIOh2N-qNc/view
+
+## Main File
+
+[`voice_controlled_robot.py`](voice_controlled_robot.py)
+
+## Technologies
+
+- Python
+- OpenAI speech-to-text, language and text-to-speech models
+- CoppeliaSim
+- ZeroMQ Remote API
+- NumPy
+- SoundDevice
+- SoundFile
+
+## How It Works
+
+1. The user records a spoken command.
+2. The audio is converted into text.
+3. The command is interpreted as structured robot actions.
+4. The robot provides a spoken response.
+5. The Pioneer P3-DX executes the requested movements in CoppeliaSim.
+
+## Main Features
+
+- Push-to-talk voice recording
+- Speech-to-text transcription
+- Natural-language command interpretation
+- Support for sequences of movement instructions
+- Forward and backward movement
+- Left and right rotations
+- Spoken robot responses
+- Wheel-odometry-based distance and angle control
+
+## Example Commands
+
+- “Move forward one metre.”
+- “Turn left 90 degrees.”
+- “Move forward two metres, then turn right.”
+- “Go backward half a metre.”
+
