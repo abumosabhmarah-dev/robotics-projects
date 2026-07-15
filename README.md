@@ -1,7 +1,7 @@
 # robotics-projects
 Projects in robotics, computer vision, human-robot interaction, and path planning
 
-"""
+
 Pioneer P3-DX Autonomous Maze Navigation
 
 This project demonstrates autonomous navigation of a Pioneer P3-DX mobile robot
